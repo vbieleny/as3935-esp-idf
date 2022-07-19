@@ -3,7 +3,7 @@
 #include "as3935.h"
 #include "esp_err.h"
 
-#define AS3935_SPI_MASTER_FREQ_MAX 2000000     // 2 MHz
+#define AS3935_SPI_FREQ_MAX_HZ 2000000     // 2 MHz
 
 #define AS3935_SPI_MODE_WRITE 0
 #define AS3935_SPI_MODE_READ 1

@@ -3,7 +3,8 @@
 
 esp_err_t as3935_spi_init(spi_host_device_t host_id, int cs, int clock_hz, as3935_t *dev)
 {
-    const spi_device_interface_config_t dev_config = {
+    const spi_device_interface_config_t dev_config =
+    {
         .command_bits = 2,
         .address_bits = 6,
         .mode = 1,
@@ -16,6 +17,7 @@ esp_err_t as3935_spi_init(spi_host_device_t host_id, int cs, int clock_hz, as393
     spi_device_handle_t handle;
     AS3935_CHECK(spi_bus_add_device(host_id, &dev_config, &handle));
 
+    dev->protocol = PROTOCOL_SPI;
     dev->spi_handle = handle;
     dev->host_id = host_id;
     return ESP_OK;
@@ -25,6 +27,7 @@ esp_err_t as3935_spi_free(as3935_t *dev)
 {
     AS3935_CHECK(spi_bus_remove_device(dev->spi_handle));
     AS3935_CHECK(spi_bus_free(dev->host_id));
+    dev->protocol = PROTOCOL_NONE;
     dev->spi_handle = NULL;
     return ESP_OK;
 }

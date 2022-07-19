@@ -1,24 +1,79 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "as3935.h"
+#include "as3935_i2c.h"
 #include "as3935_spi.h"
 #include "as3935_err.h"
+
+static esp_err_t as3935_read_bytes(const as3935_t *dev, uint8_t address, uint8_t *data, size_t length)
+{
+    switch (dev->protocol)
+    {
+        case PROTOCOL_I2C:
+            AS3935_CHECK(as3935_i2c_read_bytes(dev, address, data, length));
+            break;
+        case PROTOCOL_SPI:
+            AS3935_CHECK(as3935_spi_read_bytes(dev, address, data, length));
+            break;
+        default:
+            return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t as3935_write_byte(const as3935_t *dev, uint8_t address, uint8_t data)
+{
+    switch (dev->protocol)
+    {
+        case PROTOCOL_I2C:
+            AS3935_CHECK(as3935_i2c_write_byte(dev, address, data));
+            break;
+        case PROTOCOL_SPI:
+            AS3935_CHECK(as3935_spi_write_byte(dev, address, data));
+            break;
+        default:
+            return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t as3935_read_byte(const as3935_t *dev, uint8_t address, uint8_t *data)
+{
+    switch (dev->protocol)
+    {
+        case PROTOCOL_I2C:
+            AS3935_CHECK(as3935_i2c_read_byte(dev, address, data));
+            break;
+        case PROTOCOL_SPI:
+            AS3935_CHECK(as3935_spi_read_byte(dev, address, data));
+            break;
+        default:
+            return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
 
 esp_err_t as3935_reset_to_defaults(const as3935_t *dev)
 {
     AS3935_CHECK_ARG(dev);
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x3C, 0x96));
+    AS3935_CHECK(as3935_write_byte(dev, 0x3C, 0x96));
     return ESP_OK;
 }
 
 esp_err_t as3935_calibrate_rco(const as3935_t *dev)
 {
     AS3935_CHECK_ARG(dev);
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x3D, 0x96));
 
-    AS3935_CHECK(as3935_set_display_oscillator_on_irq(dev, AS3935_OSCILLATOR_SYSTEM_RC, true));
-    vTaskDelay(pdMS_TO_TICKS(2));
-    AS3935_CHECK(as3935_set_display_oscillator_on_irq(dev, AS3935_OSCILLATOR_SYSTEM_RC, false));
+    bool power_down;
+    AS3935_CHECK(as3935_get_power_down(dev, &power_down));
+    AS3935_CHECK(as3935_write_byte(dev, 0x3D, 0x96));
+
+    if (power_down)
+    {
+        AS3935_CHECK(as3935_set_display_oscillator_on_irq(dev, AS3935_OSCILLATOR_SYSTEM_RC, true));
+        vTaskDelay(pdMS_TO_TICKS(2));
+        AS3935_CHECK(as3935_set_display_oscillator_on_irq(dev, AS3935_OSCILLATOR_SYSTEM_RC, false));
+    }
 
     return ESP_OK;
 }
@@ -28,14 +83,14 @@ esp_err_t as3935_clear_lightning_statistics(const as3935_t *dev)
     AS3935_CHECK_ARG(dev);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x02, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x02, &data));
 
     data |= 1 << 6;
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x02, data));
+    AS3935_CHECK(as3935_write_byte(dev, 0x02, data));
     data &= ~(1 << 6);
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x02, data));
+    AS3935_CHECK(as3935_write_byte(dev, 0x02, data));
     data |= 1 << 6;
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x02, data));
+    AS3935_CHECK(as3935_write_byte(dev, 0x02, data));
 
     return ESP_OK;
 }
@@ -45,15 +100,15 @@ esp_err_t as3935_set_power_down(const as3935_t *dev, bool power_down)
     AS3935_CHECK_ARG(dev);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x00, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x00, &data));
 
     if (power_down)
         data |= 1;
     else
         data &= ~1;
-    
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x00, data));
-    
+
+    AS3935_CHECK(as3935_write_byte(dev, 0x00, data));
+
     if (!power_down)
         AS3935_CHECK(as3935_calibrate_rco(dev));
 
@@ -63,17 +118,17 @@ esp_err_t as3935_set_power_down(const as3935_t *dev, bool power_down)
 esp_err_t as3935_set_watchdog_threshold(const as3935_t *dev, int watchdog_threshold)
 {
     AS3935_CHECK_ARG(dev);
-    
+
     if (watchdog_threshold < 0 || watchdog_threshold > 15)
         return ESP_ERR_INVALID_ARG;
-    
+
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x01, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x01, &data));
 
     data &= ~0b1111;
     data |= watchdog_threshold;
 
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x01, data));
+    AS3935_CHECK(as3935_write_byte(dev, 0x01, data));
 
     return ESP_OK;
 }
@@ -83,7 +138,7 @@ esp_err_t as3935_set_analog_frontend(const as3935_t *dev, as3935_analog_frontend
     AS3935_CHECK_ARG(dev);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x00, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x00, &data));
 
     data &= ~(0b11111 << 1);
 
@@ -98,8 +153,8 @@ esp_err_t as3935_set_analog_frontend(const as3935_t *dev, as3935_analog_frontend
         default:
             return ESP_ERR_INVALID_ARG;
     }
-    
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x00, data));
+
+    AS3935_CHECK(as3935_write_byte(dev, 0x00, data));
 
     return ESP_OK;
 }
@@ -109,7 +164,7 @@ esp_err_t as3935_set_noise_floor_level(const as3935_t *dev, as3935_noise_level_e
     AS3935_CHECK_ARG(dev);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x01, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x01, &data));
 
     data &= ~(0b111 << 4);
 
@@ -142,8 +197,8 @@ esp_err_t as3935_set_noise_floor_level(const as3935_t *dev, as3935_noise_level_e
         default:
             return ESP_ERR_INVALID_ARG;
     }
-    
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x01, data));
+
+    AS3935_CHECK(as3935_write_byte(dev, 0x01, data));
 
     return ESP_OK;
 }
@@ -151,17 +206,17 @@ esp_err_t as3935_set_noise_floor_level(const as3935_t *dev, as3935_noise_level_e
 esp_err_t as3935_set_spike_rejection(const as3935_t *dev, int spike_rejection)
 {
     AS3935_CHECK_ARG(dev);
-    
+
     if (spike_rejection < 0 || spike_rejection > 15)
         return ESP_ERR_INVALID_ARG;
-    
+
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x02, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x02, &data));
 
     data &= ~0b1111;
     data |= spike_rejection;
 
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x02, data));
+    AS3935_CHECK(as3935_write_byte(dev, 0x02, data));
 
     return ESP_OK;
 }
@@ -171,7 +226,7 @@ esp_err_t as3935_set_minimum_lightnings(const as3935_t *dev, as3935_min_lightnin
     AS3935_CHECK_ARG(dev);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x02, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x02, &data));
 
     data &= ~(0b11 << 4);
 
@@ -193,7 +248,7 @@ esp_err_t as3935_set_minimum_lightnings(const as3935_t *dev, as3935_min_lightnin
             return ESP_ERR_INVALID_ARG;
     }
 
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x02, data));
+    AS3935_CHECK(as3935_write_byte(dev, 0x02, data));
 
     return ESP_OK;
 }
@@ -203,12 +258,12 @@ esp_err_t as3935_set_disturber_detection(const as3935_t *dev, bool enabled)
     AS3935_CHECK_ARG(dev);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x03, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x03, &data));
 
     data &= ~(1 << 5);
     data |= (enabled ? 0 : 1) << 5;
 
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x03, data));
+    AS3935_CHECK(as3935_write_byte(dev, 0x03, data));
 
     return ESP_OK;
 }
@@ -218,7 +273,7 @@ esp_err_t as3935_set_frequency_division_ratio(const as3935_t *dev, as3935_freque
     AS3935_CHECK_ARG(dev);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x03, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x03, &data));
 
     data &= ~(0b11 << 6);
 
@@ -240,7 +295,7 @@ esp_err_t as3935_set_frequency_division_ratio(const as3935_t *dev, as3935_freque
             return ESP_ERR_INVALID_ARG;
     }
 
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x03, data));
+    AS3935_CHECK(as3935_write_byte(dev, 0x03, data));
 
     return ESP_OK;
 }
@@ -266,12 +321,12 @@ esp_err_t as3935_set_display_oscillator_on_irq(const as3935_t *dev, as3935_oscil
     }
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x08, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x08, &data));
 
     data &= ~(1 << shift);
     data |= (enabled ? 1 : 0) << shift;
 
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x08, data));
+    AS3935_CHECK(as3935_write_byte(dev, 0x08, data));
 
     return ESP_OK;
 }
@@ -279,17 +334,17 @@ esp_err_t as3935_set_display_oscillator_on_irq(const as3935_t *dev, as3935_oscil
 esp_err_t as3935_set_internal_capacitors(const as3935_t *dev, int value)
 {
     AS3935_CHECK_ARG(dev);
-    
+
     if (value < 0 || value > 15)
         return ESP_ERR_INVALID_ARG;
-    
+
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x08, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x08, &data));
 
     data &= ~0b1111;
     data |= value;
 
-    AS3935_CHECK(as3935_spi_write_byte(dev, 0x08, data));
+    AS3935_CHECK(as3935_write_byte(dev, 0x08, data));
 
     return ESP_OK;
 }
@@ -300,7 +355,7 @@ esp_err_t as3935_get_power_down(const as3935_t *dev, bool *power_down)
     AS3935_CHECK_ARG(power_down);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x00, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x00, &data));
 
     *power_down = data & 1;
 
@@ -311,9 +366,9 @@ esp_err_t as3935_get_watchdog_threshold(const as3935_t *dev, int *watchdog_thres
 {
     AS3935_CHECK_ARG(dev);
     AS3935_CHECK_ARG(watchdog_threshold);
-    
+
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x01, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x01, &data));
 
     *watchdog_threshold = data & 0b1111;
 
@@ -326,7 +381,7 @@ esp_err_t as3935_get_analog_frontend(const as3935_t *dev, as3935_analog_frontend
     AS3935_CHECK_ARG(frontend);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x00, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x00, &data));
 
     data &= 0b11111 << 1;
     data >>= 1;
@@ -352,7 +407,7 @@ esp_err_t as3935_get_noise_floor_level(const as3935_t *dev, as3935_noise_level_e
     AS3935_CHECK_ARG(level);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x01, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x01, &data));
 
     data &= 0b111 << 4;
     data >>= 4;
@@ -394,9 +449,9 @@ esp_err_t as3935_get_spike_rejection(const as3935_t *dev, int *spike_rejection)
 {
     AS3935_CHECK_ARG(dev);
     AS3935_CHECK_ARG(spike_rejection);
-    
+
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x02, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x02, &data));
 
     *spike_rejection = data & 0b1111;
 
@@ -409,7 +464,7 @@ esp_err_t as3935_get_minimum_lightnings(const as3935_t *dev, as3935_min_lightnin
     AS3935_CHECK_ARG(lightnings);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x02, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x02, &data));
 
     data &= 0b11 << 4;
     data >>= 4;
@@ -441,7 +496,7 @@ esp_err_t as3935_get_disturber_detection(const as3935_t *dev, bool *enabled)
     AS3935_CHECK_ARG(enabled);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x03, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x03, &data));
 
     *enabled = !(data & (1 << 5));
 
@@ -454,7 +509,7 @@ esp_err_t as3935_get_frequency_division_ratio(const as3935_t *dev, as3935_freque
     AS3935_CHECK_ARG(ratio);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x03, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x03, &data));
 
     data &= 0b11 << 6;
     data >>= 6;
@@ -502,7 +557,7 @@ esp_err_t as3935_get_display_oscillator_on_irq(const as3935_t *dev, as3935_oscil
     }
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x08, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x08, &data));
 
     *enabled = data & (1 << shift);
 
@@ -513,9 +568,9 @@ esp_err_t as3935_get_internal_capacitors(const as3935_t *dev, int *value)
 {
     AS3935_CHECK_ARG(dev);
     AS3935_CHECK_ARG(value);
-    
+
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x08, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x08, &data));
 
     *value = data & 0b1111;
 
@@ -528,7 +583,7 @@ esp_err_t as3935_get_interrupt_reason(const as3935_t *dev, as3935_interrupt_reas
     AS3935_CHECK_ARG(reason);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x03, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x03, &data));
 
     data &= 0b1111;
 
@@ -559,7 +614,7 @@ esp_err_t as3935_get_srco_calibration_status(const as3935_t *dev, as3935_rco_cal
     AS3935_CHECK_ARG(status);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x3B, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x3B, &data));
 
     bool done = data & (1 << 7);
     bool nok = data & (1 << 6);
@@ -582,7 +637,7 @@ esp_err_t as3935_get_trco_calibration_status(const as3935_t *dev, as3935_rco_cal
     AS3935_CHECK_ARG(status);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x3A, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x3A, &data));
 
     bool done = data & (1 << 7);
     bool nok = data & (1 << 6);
@@ -605,7 +660,7 @@ esp_err_t as3935_get_distance(const as3935_t *dev, int *distance)
     AS3935_CHECK_ARG(distance);
 
     uint8_t data;
-    AS3935_CHECK(as3935_spi_read_byte(dev, 0x07, &data));
+    AS3935_CHECK(as3935_read_byte(dev, 0x07, &data));
     switch (data)
     {
         case 0b111111:
@@ -669,7 +724,7 @@ esp_err_t as3935_get_lightning_energy(const as3935_t *dev, uint32_t *energy)
     AS3935_CHECK_ARG(energy);
 
     uint8_t data[3];
-    AS3935_CHECK(as3935_spi_read_bytes(dev, 0x04, data, 3));
+    AS3935_CHECK(as3935_read_bytes(dev, 0x04, data, 3));
 
     data[2] &= 0b11111;
 
